@@ -14,6 +14,8 @@ if "coords" not in st.session_state:
 # --- 侧边栏设置 ---
 st.sidebar.header("配置区")
 alpha = st.sidebar.slider("透明度", 0, 255, 150)
+wm_text = st.sidebar.text_input("水印文字", "点击图片调整位置")
+font_size = st.sidebar.slider("文字大小", 10, 200, 50)
 logo_file = st.sidebar.file_uploader("上传 Logo (可选)", type=['png', 'jpg', 'jpeg'])
 
 # --- 主界面 ---
