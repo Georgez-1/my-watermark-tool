@@ -1,4 +1,3 @@
 streamlit
 Pillow
-streamlit-image-coordinates
-streamlit-canvas
+streamlit-drawable-canvas
