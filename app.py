@@ -2,68 +2,84 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import io
 import zipfile
-from streamlit_image_coordinates import streamlit_image_coordinates
+from streamlit_drawable_canvas import st_canvas
 
-st.set_page_config(page_title="交互式批量水印工具", layout="wide")
-st.title("🎯 精准定位水印工厂")
-
-# --- 初始化位置 (如果没点击过，默认在 50, 50) ---
-if "coords" not in st.session_state:
-    st.session_state.coords = {"x": 50, "y": 50}
+st.set_page_config(page_title="可视化拖拽水印", layout="wide")
+st.title("🖱️ 鼠标拖拽定位水印工厂")
 
 # --- 侧边栏设置 ---
 st.sidebar.header("配置区")
+wm_text = st.sidebar.text_input("水印文字", "我的专属水印")
+font_size = st.sidebar.slider("字体大小", 10, 150, 40)
 alpha = st.sidebar.slider("透明度", 0, 255, 150)
-wm_text = st.sidebar.text_input("水印文字", "点击图片调整位置")
-font_size = st.sidebar.slider("文字大小", 10, 200, 50)
-logo_file = st.sidebar.file_uploader("上传 Logo (可选)", type=['png', 'jpg', 'jpeg'])
+text_color = st.sidebar.color_picker("文字颜色", "#FFFFFF")
 
-# --- 主界面 ---
-uploaded_files = st.file_uploader("上传图片 (支持多选)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("上传图片", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
 
 if uploaded_files:
-    # 1. 基础图片处理
-    base_img = Image.open(uploaded_files[0]).convert("RGBA")
+    # 加载第一张图作为底图
+    bg_image = Image.open(uploaded_files[0])
+    w, h = bg_image.size
     
-    st.write("💡 **直接点击下方预览图，水印会自动移动到点击处：**")
-    
-    # 2. 获取点击坐标
-    # 我们先渲染一张带水印的预览图
-    def render_preview(img, x, y):
-        overlay = Image.new("RGBA", img.size, (0,0,0,0))
-        draw = ImageDraw.Draw(overlay)
-        draw.text((x, y), wm_text, fill=(255, 255, 255, alpha))
-        if logo_file:
-            logo = Image.open(logo_file).convert("RGBA")
-            logo.thumbnail((200, 200))
-            overlay.paste(logo, (int(x), int(y + font_size)), logo)
-        return Image.alpha_composite(img, overlay).convert("RGB")
+    # 为了方便在网页操作，如果图片太大，我们按比例缩小显示
+    max_display_width = 800
+    display_ratio = max_display_width / w
+    display_h = int(h * display_ratio)
 
-    # 展示可点击的预览图
-    value = streamlit_image_coordinates(render_preview(base_img, st.session_state.coords["x"], st.session_state.coords["y"]))
+    st.write("💡 **操作指南：** 点击左侧工具栏的 [选择箭头]，即可拖动水印文字。")
 
-    # 如果用户点击了图片，更新坐标并刷新
-    if value:
-        st.session_state.coords["x"] = value["x"]
-        st.session_state.coords["y"] = value["y"]
-        st.rerun()
+    # --- 创建交互式画布 ---
+    canvas_result = st_canvas(
+        fill_color="rgba(255, 255, 255, 0)",  # 填充透明
+        stroke_width=1,
+        background_image=bg_image,
+        update_streamlit=True,
+        height=display_h,
+        width=max_display_width,
+        drawing_mode="transform", # 设置为变换模式，允许拖动
+        initial_drawing={
+            "objects": [{
+                "type": "text",
+                "left": 50,
+                "top": 50,
+                "text": wm_text,
+                "fontSize": font_size,
+                "fill": text_color,
+                "opacity": alpha / 255
+            }]
+        },
+        key="canvas",
+    )
 
-    st.write(f"当前位置：X={st.session_state.coords['x']}, Y={st.session_state.coords['y']}")
+    # --- 获取拖拽后的位置 ---
+    final_x, final_y = 50, 50 # 默认值
+    if canvas_result.json_data and "objects" in canvas_result.json_data:
+        if len(canvas_result.json_data["objects"]) > 0:
+            obj = canvas_result.json_data["objects"][0]
+            # 还原回原图比例的坐标
+            final_x = int(obj["left"] / display_ratio)
+            final_y = int(obj["top"] / display_ratio)
 
-    # 3. 批量处理与下载
-    if st.button("🚀 确认位置并批量打包下载"):
+    # --- 批量处理按钮 ---
+    if st.button("🚀 确认当前位置，开始批量导出"):
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-            for file in uploaded_files:
+            progress_bar = st.progress(0)
+            for i, file in enumerate(uploaded_files):
                 img = Image.open(file).convert("RGBA")
-                overlay = Image.new("RGBA", img.size, (0,0,0,0))
-                draw = ImageDraw.Draw(overlay)
-                draw.text((st.session_state.coords["x"], st.session_state.coords["y"]), wm_text, fill=(255, 255, 255, alpha))
-                # ... Logo 逻辑同上 ...
-                out = Image.alpha_composite(img, overlay).convert("RGB")
+                txt_layer = Image.new("RGBA", img.size, (0,0,0,0))
+                draw = ImageDraw.Draw(txt_layer)
                 
+                # 绘制最终位置的水印
+                draw.text((final_x, final_y), wm_text, fill=(255, 255, 255, alpha))
+                
+                out = Image.alpha_composite(img, txt_layer).convert("RGB")
+                
+                # 存入压缩包
                 img_byte_arr = io.BytesIO()
                 out.save(img_byte_arr, format='JPEG')
-                zip_file.writestr(f"wm_{file.name}", img_byte_arr.getvalue())
+                zip_file.writestr(f"output_{file.name}", img_byte_arr.getvalue())
+                progress_bar.progress((i + 1) / len(uploaded_files))
         
-        st.download_button("📥 点击下载 ZIP 包", zip_buffer.getvalue(), "watermarked.zip", "application/zip")
+        st.success("全部处理完成！")
+        st.download_button("📥 点击下载 ZIP 压缩包", zip_buffer.getvalue(), "batch_watermark.zip")
